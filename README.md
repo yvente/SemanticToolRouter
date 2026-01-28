@@ -264,6 +264,27 @@ User Input
 | Greeting | 0 instead of 44 | 100% |
 | Ambiguous | 5-10 instead of 44 | ~80% |
 
+## Roadmap
+
+We're actively developing SemanticToolRouter. Here's what's planned:
+
+### v1.1 - CoreML Embedding Provider (High Priority)
+- [ ] `CoreMLEmbeddingProvider` for loading `.mlpackage` models
+- [ ] Support for BGE-micro / GTE-tiny CoreML models
+- [ ] Significant improvement in Chinese semantic understanding
+- [ ] Maintain local-first, zero network dependency
+
+### v1.2 - Quality of Life Improvements
+- [ ] Async embedding provider protocol
+- [ ] Improved handling of mixed Chinese-English queries
+- [ ] More granular debug information
+
+### Community Contributions Welcome
+- [ ] Additional embedding providers (OpenAI, Ollama, etc.)
+- [ ] Platform-specific optimizations (watchOS/tvOS)
+
+> 💡 The current architecture with `EmbeddingProvider` protocol already supports custom providers. You can implement your own provider today!
+
 ## Requirements
 
 - macOS 14.0+ / iOS 17.0+

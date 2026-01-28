@@ -264,6 +264,27 @@ let router = ToolRouter(
 | 问候语 | 0 个而非 44 个 | 100% |
 | 模糊查询 | 5-10 个而非 44 个 | ~80% |
 
+## 开发路线图
+
+我们正在积极开发 SemanticToolRouter，以下是计划中的功能：
+
+### v1.1 - CoreML 嵌入提供者（高优先级）
+- [ ] `CoreMLEmbeddingProvider` 支持加载 `.mlpackage` 模型
+- [ ] 支持 BGE-micro / GTE-tiny 的 CoreML 版本
+- [ ] 显著提升中文语义理解能力
+- [ ] 保持本地优先，零网络依赖
+
+### v1.2 - 体验优化
+- [ ] 异步嵌入提供者协议
+- [ ] 改进中英文混合查询的处理
+- [ ] 更细粒度的调试信息
+
+### 欢迎社区贡献
+- [ ] 更多嵌入提供者（OpenAI、Ollama 等）
+- [ ] 平台特定优化（watchOS/tvOS）
+
+> 💡 当前架构已通过 `EmbeddingProvider` 协议支持自定义提供者，你现在就可以实现自己的嵌入提供者！
+
 ## 系统要求
 
 - macOS 14.0+ / iOS 17.0+
