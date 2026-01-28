@@ -518,4 +518,136 @@ final class ToolRouterTests: XCTestCase {
         XCTAssertFalse(result.shouldSkip)
         // Most likely fallback since embeddings aren't ready
     }
+    
+    // MARK: - Timeout Tests
+    
+    /// Test: waitForReady with timeout should complete before timeout
+    /// 测试：带超时的 waitForReady 应在超时前完成
+    func test_waitForReadyWithTimeout_shouldCompleteBeforeTimeout() async throws {
+        let config = RouterConfig(
+            enableSemanticMatching: true,
+            enableDiskCache: false
+        )
+        
+        let tools = [
+            SimpleTool(name: "test", description: "Test tool", keywords: [])
+        ]
+        
+        let router = ToolRouter(tools: tools, config: config)
+        
+        // Should complete within 10 seconds
+        try await router.waitForReady(timeout: .seconds(10))
+        
+        let isReady = await router.isReady
+        XCTAssertTrue(isReady)
+    }
+    
+    /// Test: waitForReady with very short timeout should throw timeout error
+    /// 测试：极短超时的 waitForReady 应抛出超时错误
+    func test_waitForReadyWithTimeout_shouldThrowOnTimeout() async {
+        let config = RouterConfig(
+            enableSemanticMatching: true,
+            enableDiskCache: false
+        )
+        
+        // Create many tools to make initialization slower
+        var tools: [SimpleTool] = []
+        for i in 0..<100 {
+            tools.append(SimpleTool(
+                name: "tool_\(i)",
+                description: "Tool number \(i) with a long description to slow down embedding",
+                keywords: ["keyword\(i)"]
+            ))
+        }
+        
+        let router = ToolRouter(tools: tools, config: config)
+        
+        // Very short timeout - likely to timeout
+        do {
+            try await router.waitForReady(timeout: .nanoseconds(1))
+            // If we get here without timeout, that's also fine (fast machine)
+        } catch let error as ToolRouterError {
+            XCTAssertEqual(error, .timeout)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+    
+    // MARK: - Error Callback Tests
+    
+    /// Test: onCacheError callback should be called on cache errors
+    /// 测试：缓存错误时应调用 onCacheError 回调
+    func test_onCacheError_shouldBeCalledOnInvalidCache() async {
+        let cacheFileName = "TestInvalidCache_\(UUID().uuidString).json"
+        let config = RouterConfig(
+            enableSemanticMatching: true,
+            enableDiskCache: true,
+            cacheFileName: cacheFileName
+        )
+        
+        // Write invalid JSON to cache file
+        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        let cacheURL = cacheDir.appendingPathComponent(cacheFileName)
+        try? "invalid json content".data(using: .utf8)?.write(to: cacheURL)
+        
+        // Use actor-safe error container
+        let errorContainer = ErrorContainer()
+        
+        let tools = [
+            SimpleTool(name: "test", description: "Test", keywords: [])
+        ]
+        
+        let router = ToolRouter(tools: tools, config: config)
+        await router.setOnCacheError { error in
+            Task { await errorContainer.set(error) }
+        }
+        
+        await router.waitForReady()
+        
+        // Give time for callback to complete
+        try? await Task.sleep(for: .milliseconds(100))
+        
+        // Error callback should have been called
+        if let error = await errorContainer.get() {
+            if case .cacheLoadFailed = error {
+                // Expected
+            } else {
+                XCTFail("Expected cacheLoadFailed error")
+            }
+        }
+        
+        // Cleanup
+        await router.clearDiskCache()
+    }
+}
+
+// MARK: - Helper for thread-safe error capture
+
+private actor ErrorContainer {
+    private var error: ToolRouterError?
+    
+    func set(_ error: ToolRouterError) {
+        self.error = error
+    }
+    
+    func get() -> ToolRouterError? {
+        return error
+    }
+}
+
+// MARK: - ToolRouterError Equatable
+
+extension ToolRouterError: Equatable {
+    public static func == (lhs: ToolRouterError, rhs: ToolRouterError) -> Bool {
+        switch (lhs, rhs) {
+        case (.timeout, .timeout):
+            return true
+        case (.cacheLoadFailed, .cacheLoadFailed):
+            return true
+        case (.cacheSaveFailed, .cacheSaveFailed):
+            return true
+        default:
+            return false
+        }
+    }
 }

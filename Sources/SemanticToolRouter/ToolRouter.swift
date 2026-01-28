@@ -27,6 +27,22 @@ import Foundation
 ///     // Use result.tools for LLM function calling
 /// }
 /// ```
+/// Error types for ToolRouter
+/// ToolRouter 错误类型
+public enum ToolRouterError: Error, Sendable {
+    /// Timeout waiting for embeddings to be ready
+    /// 等待嵌入就绪超时
+    case timeout
+    
+    /// Failed to load cache from disk
+    /// 从磁盘加载缓存失败
+    case cacheLoadFailed(Error)
+    
+    /// Failed to save cache to disk
+    /// 保存缓存到磁盘失败
+    case cacheSaveFailed(Error)
+}
+
 public actor ToolRouter<Tool: RoutableTool> {
     
     // MARK: - Properties
@@ -41,6 +57,21 @@ public actor ToolRouter<Tool: RoutableTool> {
     
     // Initialization task for waitForReady() - nonisolated to allow assignment in init
     private nonisolated(unsafe) var initTask: Task<Void, Never>?
+    
+    /// Error handler callback for cache operations
+    /// 缓存操作的错误处理回调
+    private var _onCacheError: (@Sendable (ToolRouterError) -> Void)?
+    
+    /// Set the error handler callback for cache operations
+    /// 设置缓存操作的错误处理回调
+    public func setOnCacheError(_ handler: (@Sendable (ToolRouterError) -> Void)?) {
+        _onCacheError = handler
+    }
+    
+    /// Get the current error handler
+    private var onCacheError: (@Sendable (ToolRouterError) -> Void)? {
+        _onCacheError
+    }
     
     // Cache version for invalidation when tools change
     private static var cacheVersion: String { "1.0" }
@@ -209,6 +240,31 @@ public actor ToolRouter<Tool: RoutableTool> {
         await initTask?.value
     }
     
+    /// Wait for embeddings to be ready with timeout
+    /// 带超时的等待嵌入就绪
+    /// - Parameter timeout: Maximum time to wait
+    /// - Throws: ToolRouterError.timeout if timeout is exceeded
+    public func waitForReady(timeout: Duration) async throws {
+        guard let task = initTask else { return }
+        
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                await task.value
+            }
+            
+            group.addTask {
+                try await Task.sleep(for: timeout)
+                throw ToolRouterError.timeout
+            }
+            
+            // Wait for first to complete
+            try await group.next()
+            
+            // Cancel the other task
+            group.cancelAll()
+        }
+    }
+    
     /// Clear the disk cache
     /// 清除磁盘缓存
     public func clearDiskCache() {
@@ -352,7 +408,7 @@ public actor ToolRouter<Tool: RoutableTool> {
     /// Load embeddings from disk cache
     /// 从磁盘缓存加载嵌入
     /// - Returns: Cached embeddings if valid, nil otherwise
-    private nonisolated func loadFromDiskCache() -> [String: CachedEmbedding]? {
+    private func loadFromDiskCache() -> [String: CachedEmbedding]? {
         guard let url = cacheFileURL() else { return nil }
         
         do {
@@ -370,7 +426,8 @@ public actor ToolRouter<Tool: RoutableTool> {
             
             return cache.embeddings
         } catch {
-            // Failed to load cache, will recompute
+            // Notify error via callback
+            onCacheError?(.cacheLoadFailed(error))
             return nil
         }
     }
@@ -391,7 +448,8 @@ public actor ToolRouter<Tool: RoutableTool> {
             let data = try JSONEncoder().encode(cache)
             try data.write(to: url, options: .atomic)
         } catch {
-            // Failed to save cache, ignore
+            // Notify error via callback
+            onCacheError?(.cacheSaveFailed(error))
         }
     }
 }

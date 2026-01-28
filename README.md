@@ -162,13 +162,28 @@ Embeddings are cached to disk for faster subsequent loads. The cache automatical
 // Wait for embeddings to be ready (recommended for semantic matching)
 await router.waitForReady()
 
+// Wait with timeout (throws ToolRouterError.timeout if exceeded)
+try await router.waitForReady(timeout: .seconds(5))
+
 // Check if embeddings are ready
-if router.isReady {
-    let result = router.route("query")
+if await router.isReady {
+    let result = await router.route("query")
 }
 
 // Clear disk cache manually
-router.clearDiskCache()
+await router.clearDiskCache()
+
+// Handle cache errors
+await router.setOnCacheError { error in
+    switch error {
+    case .timeout:
+        print("Timeout waiting for embeddings")
+    case .cacheLoadFailed(let underlyingError):
+        print("Failed to load cache: \(underlyingError)")
+    case .cacheSaveFailed(let underlyingError):
+        print("Failed to save cache: \(underlyingError)")
+    }
+}
 ```
 
 **Performance comparison:**

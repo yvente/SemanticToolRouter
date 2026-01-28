@@ -162,13 +162,28 @@ let router = ToolRouter(tools: tools, config: config)
 // 等待嵌入就绪（语义匹配时推荐）
 await router.waitForReady()
 
+// 带超时等待（超时抛出 ToolRouterError.timeout）
+try await router.waitForReady(timeout: .seconds(5))
+
 // 检查嵌入是否就绪
-if router.isReady {
-    let result = router.route("查询内容")
+if await router.isReady {
+    let result = await router.route("查询内容")
 }
 
 // 手动清除磁盘缓存
-router.clearDiskCache()
+await router.clearDiskCache()
+
+// 处理缓存错误
+await router.setOnCacheError { error in
+    switch error {
+    case .timeout:
+        print("等待嵌入超时")
+    case .cacheLoadFailed(let underlyingError):
+        print("加载缓存失败: \(underlyingError)")
+    case .cacheSaveFailed(let underlyingError):
+        print("保存缓存失败: \(underlyingError)")
+    }
+}
 ```
 
 **性能对比：**
