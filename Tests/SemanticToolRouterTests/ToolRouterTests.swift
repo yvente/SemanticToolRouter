@@ -51,78 +51,79 @@ final class ToolRouterTests: XCTestCase {
     
     // MARK: - Core Scenario Tests
     
-    func test_weatherQuery_shouldReturnWeatherTool() {
+    func test_weatherQuery_shouldReturnWeatherTool() async {
         // Chinese
-        let result1 = router.route("今天上海天气如何")
+        let result1 = await router.route("今天上海天气如何")
         XCTAssertFalse(result1.shouldSkip)
         XCTAssertTrue(result1.tools.contains { $0.name == "get_weather" })
         XCTAssertEqual(result1.method, .keyword)
         
         // English
-        let result2 = router.route("What's the weather forecast?")
+        let result2 = await router.route("What's the weather forecast?")
         XCTAssertFalse(result2.shouldSkip)
         XCTAssertTrue(result2.tools.contains { $0.name == "get_weather" })
     }
     
-    func test_greeting_shouldSkip() {
+    func test_greeting_shouldSkip() async {
         let greetings = ["你好", "Hello", "Hi", "早上好", "Thanks", "再见"]
         
         for greeting in greetings {
-            let result = router.route(greeting)
+            let result = await router.route(greeting)
             XCTAssertTrue(result.shouldSkip, "'\(greeting)' should be skipped")
             XCTAssertTrue(result.tools.isEmpty)
             XCTAssertEqual(result.method, .skipped)
         }
     }
     
-    func test_emailQuery_shouldReturnEmailTool() {
-        let result = router.route("帮我发邮件")
+    func test_emailQuery_shouldReturnEmailTool() async {
+        let result = await router.route("帮我发邮件")
         XCTAssertFalse(result.shouldSkip)
         XCTAssertTrue(result.tools.contains { $0.name == "send_email" })
     }
     
-    func test_calculatorQuery_shouldReturnCalculatorTool() {
-        let result = router.route("帮我计算 100 + 200")
+    func test_calculatorQuery_shouldReturnCalculatorTool() async {
+        let result = await router.route("帮我计算 100 + 200")
         XCTAssertFalse(result.shouldSkip)
         XCTAssertTrue(result.tools.contains { $0.name == "calculator" })
     }
     
-    func test_reminderQuery_shouldReturnReminderTool() {
-        let result = router.route("提醒我明天开会")
+    func test_reminderQuery_shouldReturnReminderTool() async {
+        let result = await router.route("提醒我明天开会")
         XCTAssertFalse(result.shouldSkip)
         XCTAssertTrue(result.tools.contains { $0.name == "create_reminder" })
     }
     
-    func test_calendarQuery_shouldReturnCalendarTool() {
-        let result = router.route("查看我的日程")
+    func test_calendarQuery_shouldReturnCalendarTool() async {
+        let result = await router.route("查看我的日程")
         XCTAssertFalse(result.shouldSkip)
         XCTAssertTrue(result.tools.contains { $0.name == "get_calendar" })
     }
     
     // MARK: - Edge Cases
     
-    func test_emptyInput_shouldSkip() {
-        let result = router.route("")
+    func test_emptyInput_shouldSkip() async {
+        let result = await router.route("")
         XCTAssertTrue(result.shouldSkip)
     }
     
-    func test_shortInput_shouldSkip() {
-        let result = router.route("hi")
+    func test_shortInput_shouldSkip() async {
+        let result = await router.route("hi")
         XCTAssertTrue(result.shouldSkip)
     }
     
-    func test_noKeywordMatch_shouldFallback() {
+    func test_noKeywordMatch_shouldFallback() async {
         // Disable semantic matching, so this should fallback
-        let result = router.route("帮我做一些随机的事情")
+        let result = await router.route("帮我做一些随机的事情")
         XCTAssertFalse(result.shouldSkip)
         XCTAssertEqual(result.method, .fallback)
-        XCTAssertEqual(result.tools.count, router.allTools.count)
+        let allTools = await router.allTools
+        XCTAssertEqual(result.tools.count, allTools.count)
     }
     
     // MARK: - Context Tests
     
-    func test_routeWithContext_shouldConsiderContext() {
-        let result = router.route(
+    func test_routeWithContext_shouldConsiderContext() async {
+        let result = await router.route(
             "帮我查一下",
             context: ["用户说：天气怎么样"]
         )
@@ -132,24 +133,26 @@ final class ToolRouterTests: XCTestCase {
     
     // MARK: - Configuration Tests
     
-    func test_customGreetingPatterns_shouldWork() {
+    func test_customGreetingPatterns_shouldWork() async {
         let customConfig = RouterConfig(
             greetingPatterns: ["custom_greeting"]
         )
-        let customRouter = ToolRouter(tools: router.allTools, config: customConfig)
+        let allTools = await router.allTools
+        let customRouter = ToolRouter(tools: allTools, config: customConfig)
         
-        let result = customRouter.route("custom_greeting")
+        let result = await customRouter.route("custom_greeting")
         XCTAssertTrue(result.shouldSkip)
     }
     
-    func test_disableKeywordMatching_shouldFallback() {
+    func test_disableKeywordMatching_shouldFallback() async {
         let noKeywordConfig = RouterConfig(
             enableKeywordMatching: false,
             enableSemanticMatching: false
         )
-        let noKeywordRouter = ToolRouter(tools: router.allTools, config: noKeywordConfig)
+        let allTools = await router.allTools
+        let noKeywordRouter = ToolRouter(tools: allTools, config: noKeywordConfig)
         
-        let result = noKeywordRouter.route("天气怎么样")
+        let result = await noKeywordRouter.route("天气怎么样")
         XCTAssertEqual(result.method, .fallback)
     }
     
@@ -177,7 +180,8 @@ final class ToolRouterTests: XCTestCase {
         let router1 = ToolRouter(tools: tools, config: config)
         await router1.waitForReady()
         
-        XCTAssertTrue(router1.isReady, "Router should be ready after waitForReady")
+        let isReady1 = await router1.isReady
+        XCTAssertTrue(isReady1, "Router should be ready after waitForReady")
         
         // Verify cache file exists
         let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
@@ -188,10 +192,11 @@ final class ToolRouterTests: XCTestCase {
         let router2 = ToolRouter(tools: tools, config: config)
         await router2.waitForReady()
         
-        XCTAssertTrue(router2.isReady, "Second router should be ready")
+        let isReady2 = await router2.isReady
+        XCTAssertTrue(isReady2, "Second router should be ready")
         
         // Cleanup
-        router1.clearDiskCache()
+        await router1.clearDiskCache()
         XCTAssertFalse(FileManager.default.fileExists(atPath: cacheURL.path), "Cache file should be deleted")
     }
     
@@ -219,24 +224,26 @@ final class ToolRouterTests: XCTestCase {
         let router2 = ToolRouter(tools: tools2, config: config)
         await router2.waitForReady()
         
-        XCTAssertTrue(router2.isReady, "Router with changed tools should still be ready")
+        let isReady2 = await router2.isReady
+        XCTAssertTrue(isReady2, "Router with changed tools should still be ready")
         
         // Cleanup
-        router2.clearDiskCache()
+        await router2.clearDiskCache()
     }
     
-    func test_isReady_shouldBeFalseInitially() {
+    func test_isReady_shouldBeFalseInitially() async {
         let config = RouterConfig(
             enableSemanticMatching: true,
             enableDiskCache: false
         )
         
+        let allTools = await router.allTools
         // Clear any existing cache
-        let freshRouter = ToolRouter(tools: router.allTools, config: config)
+        let freshRouter = ToolRouter(tools: allTools, config: config)
         
         // isReady might be false initially if embeddings haven't been computed yet
         // This is a timing-dependent test, so we just verify the property exists
-        _ = freshRouter.isReady
+        let _ = await freshRouter.isReady
     }
     
     func test_waitForReady_shouldComplete() async {
@@ -245,12 +252,14 @@ final class ToolRouterTests: XCTestCase {
             enableDiskCache: false
         )
         
-        let asyncRouter = ToolRouter(tools: router.allTools, config: config)
+        let allTools = await router.allTools
+        let asyncRouter = ToolRouter(tools: allTools, config: config)
         
         // Wait should complete
         await asyncRouter.waitForReady()
         
-        XCTAssertTrue(asyncRouter.isReady, "Router should be ready after waiting")
+        let isReady = await asyncRouter.isReady
+        XCTAssertTrue(isReady, "Router should be ready after waiting")
     }
     
     // MARK: - Semantic Matching Tests (Vector Comparison)
@@ -277,7 +286,7 @@ final class ToolRouterTests: XCTestCase {
         await semanticRouter.waitForReady()
         
         // "temperature" is semantically related to weather description
-        let result = semanticRouter.route("What is the temperature outside")
+        let result = await semanticRouter.route("What is the temperature outside")
         
         // Should match via semantic, not fallback to all tools
         if result.method == .semantic {
@@ -310,7 +319,7 @@ final class ToolRouterTests: XCTestCase {
         await semanticRouter.waitForReady()
         
         // Completely unrelated query
-        let result = semanticRouter.route("Tell me a joke about programming")
+        let result = await semanticRouter.route("Tell me a joke about programming")
         
         // With high threshold, unrelated query should fallback
         // Either no semantic match or fallback to all tools
@@ -343,7 +352,7 @@ final class ToolRouterTests: XCTestCase {
         let semanticRouter = ToolRouter(tools: tools, config: config)
         await semanticRouter.waitForReady()
         
-        let result = semanticRouter.route("I want to send a message via email")
+        let result = await semanticRouter.route("I want to send a message via email")
         
         if result.method == .semantic {
             // Confidence should be between 0 and 1
@@ -385,7 +394,7 @@ final class ToolRouterTests: XCTestCase {
         let semanticRouter = ToolRouter(tools: tools, config: config)
         await semanticRouter.waitForReady()
         
-        let result = semanticRouter.route("What's the weather forecast for tomorrow")
+        let result = await semanticRouter.route("What's the weather forecast for tomorrow")
         
         if result.method == .semantic {
             // Should return at most maxTools
@@ -416,7 +425,7 @@ final class ToolRouterTests: XCTestCase {
         await semanticRouter.waitForReady()
         
         // Chinese input about math
-        let result = semanticRouter.route("帮我算一下这道数学题")
+        let result = await semanticRouter.route("帮我算一下这道数学题")
         
         // Test that it doesn't crash and returns a valid result
         XCTAssertFalse(result.shouldSkip)
@@ -444,7 +453,7 @@ final class ToolRouterTests: XCTestCase {
         await priorityRouter.waitForReady()
         
         // Input contains keyword "天气"
-        let result = priorityRouter.route("今天天气怎么样")
+        let result = await priorityRouter.route("今天天气怎么样")
         
         // Should match via keyword (faster path), not semantic
         XCTAssertEqual(result.method, .keyword)
@@ -472,7 +481,7 @@ final class ToolRouterTests: XCTestCase {
         let debugRouter = ToolRouter(tools: tools, config: config)
         await debugRouter.waitForReady()
         
-        let result = debugRouter.route("test query for debugging")
+        let result = await debugRouter.route("test query for debugging")
         
         // Debug info should be present
         XCTAssertNotNil(result.debugInfo)
@@ -484,7 +493,7 @@ final class ToolRouterTests: XCTestCase {
     
     /// Test: Embeddings not ready should fallback gracefully
     /// 测试：嵌入未就绪时应优雅回退
-    func test_semanticMatch_notReadyShouldFallback() {
+    func test_semanticMatch_notReadyShouldFallback() async {
         let config = RouterConfig(
             enableKeywordMatching: false,
             enableSemanticMatching: true,
@@ -503,7 +512,7 @@ final class ToolRouterTests: XCTestCase {
         let notReadyRouter = ToolRouter(tools: tools, config: config)
         
         // Query immediately without waiting
-        let result = notReadyRouter.route("some query")
+        let result = await notReadyRouter.route("some query")
         
         // Should not crash, either semantic match or fallback
         XCTAssertFalse(result.shouldSkip)

@@ -72,8 +72,11 @@ let tools = [
 // 2. Create router
 let router = ToolRouter(tools: tools)
 
-// 3. Route user input
-let result = router.route("What's the weather today?")
+// 3. Wait for embeddings to be ready (recommended for semantic matching)
+await router.waitForReady()
+
+// 4. Route user input
+let result = await router.route("What's the weather today?")
 
 if result.shouldSkip {
     // No tools needed (greeting, chat, etc.)
@@ -93,7 +96,10 @@ import SemanticToolRouter
 let router = ToolRouter(tools: myTools)
 
 func chat(_ message: String) async throws -> String {
-    let result = router.route(message)
+    // Wait for router to be ready (call once at startup)
+    await router.waitForReady()
+    
+    let result = await router.route(message)
     
     // Convert to OpenAI format
     let openAITools: [ChatQuery.ChatCompletionToolParam]? = result.shouldSkip 

@@ -14,7 +14,12 @@ import Foundation
 /// ]
 ///
 /// let router = ToolRouter(tools: tools)
-/// let result = router.route("今天天气如何")
+///
+/// // Wait for embeddings to be ready (recommended)
+/// await router.waitForReady()
+///
+/// // Route user input
+/// let result = await router.route("今天天气如何")
 ///
 /// if result.shouldSkip {
 ///     // No tools needed (greeting, chat, etc.)
@@ -22,7 +27,7 @@ import Foundation
 ///     // Use result.tools for LLM function calling
 /// }
 /// ```
-public final class ToolRouter<Tool: RoutableTool>: @unchecked Sendable {
+public actor ToolRouter<Tool: RoutableTool> {
     
     // MARK: - Properties
     
@@ -30,15 +35,17 @@ public final class ToolRouter<Tool: RoutableTool>: @unchecked Sendable {
     private let config: RouterConfig
     private let embeddingProvider: any EmbeddingProvider
     
-    // Cached embeddings
+    // Cached embeddings (actor-isolated, no lock needed)
     private var toolEmbeddings: [String: CachedEmbedding] = [:]
     private var isEmbeddingsReady: Bool = false
-    private let embeddingsLock = NSLock()
+    
+    // Continuations waiting for embeddings to be ready
+    private var readyContinuations: [CheckedContinuation<Void, Never>] = []
     
     // Cache version for invalidation when tools change
     private static var cacheVersion: String { "1.0" }
     
-    private struct CachedEmbedding: Codable {
+    private struct CachedEmbedding: Codable, Sendable {
         let name: String
         let description: String
         let embedding: [Double]
@@ -48,7 +55,7 @@ public final class ToolRouter<Tool: RoutableTool>: @unchecked Sendable {
     
     /// Disk cache container with version and tool hash for invalidation
     /// 磁盘缓存容器，包含版本和工具哈希用于失效判断
-    private struct DiskCache: Codable {
+    private struct DiskCache: Codable, Sendable {
         let version: String
         let toolsHash: String
         let providerName: String
@@ -74,8 +81,8 @@ public final class ToolRouter<Tool: RoutableTool>: @unchecked Sendable {
         
         // Pre-compute embeddings in background
         if config.enableSemanticMatching {
-            Task.detached(priority: .utility) { [weak self] in
-                await self?.initializeEmbeddings()
+            Task { [self] in
+                await self.initializeEmbeddings()
             }
         }
     }
@@ -85,10 +92,8 @@ public final class ToolRouter<Tool: RoutableTool>: @unchecked Sendable {
     private func initializeEmbeddings() async {
         // Try to load from disk cache
         if config.enableDiskCache, let cached = loadFromDiskCache() {
-            embeddingsLock.withLock {
-                toolEmbeddings = cached
-                isEmbeddingsReady = true
-            }
+            toolEmbeddings = cached
+            markReady()
             return
         }
         
@@ -99,6 +104,18 @@ public final class ToolRouter<Tool: RoutableTool>: @unchecked Sendable {
         if config.enableDiskCache {
             saveToDiskCache()
         }
+        
+        markReady()
+    }
+    
+    /// Mark embeddings as ready and resume all waiting continuations
+    /// 标记嵌入就绪并恢复所有等待的 continuation
+    private func markReady() {
+        isEmbeddingsReady = true
+        for continuation in readyContinuations {
+            continuation.resume()
+        }
+        readyContinuations.removeAll()
     }
     
     // MARK: - Public Methods
@@ -190,6 +207,33 @@ public final class ToolRouter<Tool: RoutableTool>: @unchecked Sendable {
         return tools
     }
     
+    /// Check if embeddings are ready
+    /// 检查嵌入是否就绪
+    public var isReady: Bool {
+        return isEmbeddingsReady
+    }
+    
+    /// Wait for embeddings to be ready
+    /// 等待嵌入就绪
+    public func waitForReady() async {
+        // Already ready, return immediately
+        if isEmbeddingsReady {
+            return
+        }
+        
+        // Wait using continuation
+        await withCheckedContinuation { continuation in
+            readyContinuations.append(continuation)
+        }
+    }
+    
+    /// Clear the disk cache
+    /// 清除磁盘缓存
+    public func clearDiskCache() {
+        guard let url = cacheFileURL() else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+    
     // MARK: - Private Methods
     
     private func shouldSkipToolMatching(_ input: String) -> Bool {
@@ -232,18 +276,13 @@ public final class ToolRouter<Tool: RoutableTool>: @unchecked Sendable {
     }
     
     private func semanticMatch(_ input: String) -> [(String, Double)] {
-        embeddingsLock.lock()
-        let ready = isEmbeddingsReady
-        let embeddings = toolEmbeddings
-        embeddingsLock.unlock()
-        
-        guard ready, let inputEmbedding = embeddingProvider.embed(input) else {
+        guard isEmbeddingsReady, let inputEmbedding = embeddingProvider.embed(input) else {
             return []
         }
         
         var scores: [(String, Double)] = []
         
-        for (toolName, cached) in embeddings {
+        for (toolName, cached) in toolEmbeddings {
             let descScore = embeddingProvider.cosineSimilarity(inputEmbedding, cached.embedding)
             
             var maxKeywordScore: Double = 0.0
@@ -301,17 +340,14 @@ public final class ToolRouter<Tool: RoutableTool>: @unchecked Sendable {
             )
         }
         
-        embeddingsLock.withLock {
-            toolEmbeddings = newEmbeddings
-            isEmbeddingsReady = true
-        }
+        toolEmbeddings = newEmbeddings
     }
     
     // MARK: - Disk Cache
     
     /// Get the cache file URL
     /// 获取缓存文件 URL
-    private func cacheFileURL() -> URL? {
+    private nonisolated func cacheFileURL() -> URL? {
         guard let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
             return nil
         }
@@ -320,7 +356,7 @@ public final class ToolRouter<Tool: RoutableTool>: @unchecked Sendable {
     
     /// Generate a hash of tools for cache invalidation
     /// 生成工具哈希用于缓存失效判断
-    private func computeToolsHash() -> String {
+    private nonisolated func computeToolsHash() -> String {
         var hasher = Hasher()
         for tool in tools.sorted(by: { $0.name < $1.name }) {
             hasher.combine(tool.name)
@@ -334,7 +370,7 @@ public final class ToolRouter<Tool: RoutableTool>: @unchecked Sendable {
     /// Load embeddings from disk cache
     /// 从磁盘缓存加载嵌入
     /// - Returns: Cached embeddings if valid, nil otherwise
-    private func loadFromDiskCache() -> [String: CachedEmbedding]? {
+    private nonisolated func loadFromDiskCache() -> [String: CachedEmbedding]? {
         guard let url = cacheFileURL() else { return nil }
         
         do {
@@ -362,16 +398,11 @@ public final class ToolRouter<Tool: RoutableTool>: @unchecked Sendable {
     private func saveToDiskCache() {
         guard let url = cacheFileURL() else { return }
         
-        let embeddings: [String: CachedEmbedding]
-        embeddingsLock.lock()
-        embeddings = toolEmbeddings
-        embeddingsLock.unlock()
-        
         let cache = DiskCache(
             version: Self.cacheVersion,
             toolsHash: computeToolsHash(),
             providerName: embeddingProvider.providerName,
-            embeddings: embeddings
+            embeddings: toolEmbeddings
         )
         
         do {
@@ -379,29 +410,6 @@ public final class ToolRouter<Tool: RoutableTool>: @unchecked Sendable {
             try data.write(to: url, options: .atomic)
         } catch {
             // Failed to save cache, ignore
-        }
-    }
-    
-    /// Clear the disk cache
-    /// 清除磁盘缓存
-    public func clearDiskCache() {
-        guard let url = cacheFileURL() else { return }
-        try? FileManager.default.removeItem(at: url)
-    }
-    
-    /// Check if embeddings are ready
-    /// 检查嵌入是否就绪
-    public var isReady: Bool {
-        embeddingsLock.lock()
-        defer { embeddingsLock.unlock() }
-        return isEmbeddingsReady
-    }
-    
-    /// Wait for embeddings to be ready
-    /// 等待嵌入就绪
-    public func waitForReady() async {
-        while !isReady {
-            try? await Task.sleep(nanoseconds: 10_000_000) // 10ms
         }
     }
 }

@@ -72,8 +72,11 @@ let tools = [
 // 2. 创建路由器
 let router = ToolRouter(tools: tools)
 
-// 3. 路由用户输入
-let result = router.route("今天上海天气如何")
+// 3. 等待嵌入就绪（语义匹配时推荐）
+await router.waitForReady()
+
+// 4. 路由用户输入
+let result = await router.route("今天上海天气如何")
 
 if result.shouldSkip {
     // 不需要工具（问候语、闲聊等）
@@ -93,7 +96,10 @@ import SemanticToolRouter
 let router = ToolRouter(tools: myTools)
 
 func chat(_ message: String) async throws -> String {
-    let result = router.route(message)
+    // 等待路由器就绪（启动时调用一次即可）
+    await router.waitForReady()
+    
+    let result = await router.route(message)
     
     // 转换为 OpenAI 格式
     let openAITools: [ChatQuery.ChatCompletionToolParam]? = result.shouldSkip 
