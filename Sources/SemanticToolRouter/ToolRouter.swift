@@ -35,12 +35,24 @@ public final class ToolRouter<Tool: RoutableTool>: @unchecked Sendable {
     private var isEmbeddingsReady: Bool = false
     private let embeddingsLock = NSLock()
     
+    // Cache version for invalidation when tools change
+    private static var cacheVersion: String { "1.0" }
+    
     private struct CachedEmbedding: Codable {
         let name: String
         let description: String
         let embedding: [Double]
         let keywords: [String]
         let keywordEmbeddings: [[Double]]
+    }
+    
+    /// Disk cache container with version and tool hash for invalidation
+    /// 磁盘缓存容器，包含版本和工具哈希用于失效判断
+    private struct DiskCache: Codable {
+        let version: String
+        let toolsHash: String
+        let providerName: String
+        let embeddings: [String: CachedEmbedding]
     }
     
     // MARK: - Initialization
@@ -63,8 +75,29 @@ public final class ToolRouter<Tool: RoutableTool>: @unchecked Sendable {
         // Pre-compute embeddings in background
         if config.enableSemanticMatching {
             Task.detached(priority: .utility) { [weak self] in
-                await self?.precomputeEmbeddings()
+                await self?.initializeEmbeddings()
             }
+        }
+    }
+    
+    /// Initialize embeddings: try loading from disk cache first, then compute if needed
+    /// 初始化嵌入：首先尝试从磁盘缓存加载，如果需要则计算
+    private func initializeEmbeddings() async {
+        // Try to load from disk cache
+        if config.enableDiskCache, let cached = loadFromDiskCache() {
+            embeddingsLock.withLock {
+                toolEmbeddings = cached
+                isEmbeddingsReady = true
+            }
+            return
+        }
+        
+        // Compute embeddings
+        await precomputeEmbeddings()
+        
+        // Save to disk cache
+        if config.enableDiskCache {
+            saveToDiskCache()
         }
     }
     
@@ -271,6 +304,104 @@ public final class ToolRouter<Tool: RoutableTool>: @unchecked Sendable {
         embeddingsLock.withLock {
             toolEmbeddings = newEmbeddings
             isEmbeddingsReady = true
+        }
+    }
+    
+    // MARK: - Disk Cache
+    
+    /// Get the cache file URL
+    /// 获取缓存文件 URL
+    private func cacheFileURL() -> URL? {
+        guard let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        return cacheDir.appendingPathComponent(config.cacheFileName)
+    }
+    
+    /// Generate a hash of tools for cache invalidation
+    /// 生成工具哈希用于缓存失效判断
+    private func computeToolsHash() -> String {
+        var hasher = Hasher()
+        for tool in tools.sorted(by: { $0.name < $1.name }) {
+            hasher.combine(tool.name)
+            hasher.combine(tool.description)
+            hasher.combine(tool.keywords)
+        }
+        let hashValue = hasher.finalize()
+        return String(format: "%08x", abs(hashValue))
+    }
+    
+    /// Load embeddings from disk cache
+    /// 从磁盘缓存加载嵌入
+    /// - Returns: Cached embeddings if valid, nil otherwise
+    private func loadFromDiskCache() -> [String: CachedEmbedding]? {
+        guard let url = cacheFileURL() else { return nil }
+        
+        do {
+            let data = try Data(contentsOf: url)
+            let cache = try JSONDecoder().decode(DiskCache.self, from: data)
+            
+            // Validate cache
+            guard cache.version == Self.cacheVersion,
+                  cache.toolsHash == computeToolsHash(),
+                  cache.providerName == embeddingProvider.providerName else {
+                // Cache is stale, remove it
+                try? FileManager.default.removeItem(at: url)
+                return nil
+            }
+            
+            return cache.embeddings
+        } catch {
+            // Failed to load cache, will recompute
+            return nil
+        }
+    }
+    
+    /// Save embeddings to disk cache
+    /// 保存嵌入到磁盘缓存
+    private func saveToDiskCache() {
+        guard let url = cacheFileURL() else { return }
+        
+        let embeddings: [String: CachedEmbedding]
+        embeddingsLock.lock()
+        embeddings = toolEmbeddings
+        embeddingsLock.unlock()
+        
+        let cache = DiskCache(
+            version: Self.cacheVersion,
+            toolsHash: computeToolsHash(),
+            providerName: embeddingProvider.providerName,
+            embeddings: embeddings
+        )
+        
+        do {
+            let data = try JSONEncoder().encode(cache)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            // Failed to save cache, ignore
+        }
+    }
+    
+    /// Clear the disk cache
+    /// 清除磁盘缓存
+    public func clearDiskCache() {
+        guard let url = cacheFileURL() else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+    
+    /// Check if embeddings are ready
+    /// 检查嵌入是否就绪
+    public var isReady: Bool {
+        embeddingsLock.lock()
+        defer { embeddingsLock.unlock() }
+        return isEmbeddingsReady
+    }
+    
+    /// Wait for embeddings to be ready
+    /// 等待嵌入就绪
+    public func waitForReady() async {
+        while !isReady {
+            try? await Task.sleep(nanoseconds: 10_000_000) // 10ms
         }
     }
 }

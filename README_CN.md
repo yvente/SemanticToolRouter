@@ -134,12 +134,43 @@ let config = RouterConfig(
         ["send_email", "read_email", "search_email"]
     ],
     
+    // 磁盘缓存设置
+    enableDiskCache: true,
+    cacheFileName: "MyToolRouterCache.json",
+    
     // 调试模式
     enableDebugInfo: true
 )
 
 let router = ToolRouter(tools: tools, config: config)
 ```
+
+## 磁盘缓存
+
+嵌入向量会缓存到磁盘，加快后续启动速度。缓存会在以下情况自动失效：
+- 工具定义变更（名称、描述或关键词）
+- 嵌入提供者变更
+- 缓存版本变更
+
+```swift
+// 等待嵌入就绪（语义匹配时推荐）
+await router.waitForReady()
+
+// 检查嵌入是否就绪
+if router.isReady {
+    let result = router.route("查询内容")
+}
+
+// 手动清除磁盘缓存
+router.clearDiskCache()
+```
+
+**性能对比：**
+
+| 场景 | 首次启动 | 后续启动 |
+|------|---------|---------|
+| 无磁盘缓存 | 计算嵌入（~100ms） | 计算嵌入（~100ms） |
+| 有磁盘缓存 | 计算 + 保存 | 从缓存加载（~5ms） |
 
 ## 多轮对话支持
 

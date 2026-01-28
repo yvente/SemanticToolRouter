@@ -134,12 +134,43 @@ let config = RouterConfig(
         ["send_email", "read_email", "search_email"]
     ],
     
+    // Disk cache settings
+    enableDiskCache: true,
+    cacheFileName: "MyToolRouterCache.json",
+    
     // Debug mode
     enableDebugInfo: true
 )
 
 let router = ToolRouter(tools: tools, config: config)
 ```
+
+## Disk Caching
+
+Embeddings are cached to disk for faster subsequent loads. The cache automatically invalidates when:
+- Tool definitions change (name, description, or keywords)
+- Embedding provider changes
+- Cache version changes
+
+```swift
+// Wait for embeddings to be ready (recommended for semantic matching)
+await router.waitForReady()
+
+// Check if embeddings are ready
+if router.isReady {
+    let result = router.route("query")
+}
+
+// Clear disk cache manually
+router.clearDiskCache()
+```
+
+**Performance comparison:**
+
+| Scenario | First Launch | Subsequent Launches |
+|----------|-------------|---------------------|
+| Without disk cache | Compute embeddings (~100ms) | Compute embeddings (~100ms) |
+| With disk cache | Compute + Save | Load from cache (~5ms) |
 
 ## Multi-turn Conversation
 
