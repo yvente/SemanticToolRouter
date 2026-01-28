@@ -39,8 +39,8 @@ public actor ToolRouter<Tool: RoutableTool> {
     private var toolEmbeddings: [String: CachedEmbedding] = [:]
     private var isEmbeddingsReady: Bool = false
     
-    // Continuations waiting for embeddings to be ready
-    private var readyContinuations: [CheckedContinuation<Void, Never>] = []
+    // Initialization task for waitForReady() - nonisolated to allow assignment in init
+    private nonisolated(unsafe) var initTask: Task<Void, Never>?
     
     // Cache version for invalidation when tools change
     private static var cacheVersion: String { "1.0" }
@@ -81,7 +81,7 @@ public actor ToolRouter<Tool: RoutableTool> {
         
         // Pre-compute embeddings in background
         if config.enableSemanticMatching {
-            Task { [self] in
+            initTask = Task { [self] in
                 await self.initializeEmbeddings()
             }
         }
@@ -93,7 +93,7 @@ public actor ToolRouter<Tool: RoutableTool> {
         // Try to load from disk cache
         if config.enableDiskCache, let cached = loadFromDiskCache() {
             toolEmbeddings = cached
-            markReady()
+            isEmbeddingsReady = true
             return
         }
         
@@ -105,17 +105,7 @@ public actor ToolRouter<Tool: RoutableTool> {
             saveToDiskCache()
         }
         
-        markReady()
-    }
-    
-    /// Mark embeddings as ready and resume all waiting continuations
-    /// 标记嵌入就绪并恢复所有等待的 continuation
-    private func markReady() {
         isEmbeddingsReady = true
-        for continuation in readyContinuations {
-            continuation.resume()
-        }
-        readyContinuations.removeAll()
     }
     
     // MARK: - Public Methods
@@ -216,15 +206,7 @@ public actor ToolRouter<Tool: RoutableTool> {
     /// Wait for embeddings to be ready
     /// 等待嵌入就绪
     public func waitForReady() async {
-        // Already ready, return immediately
-        if isEmbeddingsReady {
-            return
-        }
-        
-        // Wait using continuation
-        await withCheckedContinuation { continuation in
-            readyContinuations.append(continuation)
-        }
+        await initTask?.value
     }
     
     /// Clear the disk cache
