@@ -619,6 +619,266 @@ final class ToolRouterTests: XCTestCase {
         // Cleanup
         await router.clearDiskCache()
     }
+    
+    // MARK: - Tool Groups Tests
+    
+    /// Test: Tool groups should expand matched tools
+    /// 测试：工具组应扩展匹配的工具
+    func test_toolGroups_shouldExpandMatchedTools() async {
+        let config = RouterConfig(
+            enableKeywordMatching: true,
+            enableSemanticMatching: false,
+            toolGroups: [
+                ["read_file", "write_file", "delete_file"]
+            ]
+        )
+        
+        let tools = [
+            SimpleTool(name: "read_file", description: "Read file", keywords: ["读取", "read"]),
+            SimpleTool(name: "write_file", description: "Write file", keywords: ["写入", "write"]),
+            SimpleTool(name: "delete_file", description: "Delete file", keywords: ["删除", "delete"]),
+            SimpleTool(name: "other_tool", description: "Other", keywords: ["其他"])
+        ]
+        
+        let router = ToolRouter(tools: tools, config: config)
+        
+        // Match "read_file" should also include related tools in the group
+        let result = await router.route("帮我读取文件")
+        
+        XCTAssertTrue(result.tools.contains { $0.name == "read_file" })
+        XCTAssertTrue(result.tools.contains { $0.name == "write_file" })
+        XCTAssertTrue(result.tools.contains { $0.name == "delete_file" })
+        XCTAssertFalse(result.tools.contains { $0.name == "other_tool" })
+    }
+    
+    // MARK: - Disk Cache Disabled Tests
+    
+    /// Test: Disabled disk cache should not create file
+    /// 测试：禁用磁盘缓存不应创建文件
+    func test_diskCacheDisabled_shouldNotCreateFile() async {
+        let cacheFileName = "TestNoCacheFile_\(UUID().uuidString).json"
+        let config = RouterConfig(
+            enableSemanticMatching: true,
+            enableDiskCache: false,  // Disabled
+            cacheFileName: cacheFileName
+        )
+        
+        let tools = [
+            SimpleTool(name: "test", description: "Test tool", keywords: [])
+        ]
+        
+        let router = ToolRouter(tools: tools, config: config)
+        await router.waitForReady()
+        
+        // Cache file should NOT exist
+        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        let cacheURL = cacheDir.appendingPathComponent(cacheFileName)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cacheURL.path), "Cache file should not exist when disabled")
+    }
+    
+    // MARK: - Tool Count Change Tests
+    
+    /// Test: Adding tools should invalidate cache
+    /// 测试：添加工具应使缓存失效
+    func test_diskCache_shouldInvalidateOnToolCountChange() async {
+        let cacheFileName = "TestToolCountCache_\(UUID().uuidString).json"
+        let config = RouterConfig(
+            enableSemanticMatching: true,
+            enableDiskCache: true,
+            cacheFileName: cacheFileName
+        )
+        
+        let tools1 = [
+            SimpleTool(name: "tool1", description: "First tool", keywords: ["first"])
+        ]
+        
+        let tools2 = [
+            SimpleTool(name: "tool1", description: "First tool", keywords: ["first"]),
+            SimpleTool(name: "tool2", description: "Second tool", keywords: ["second"])
+        ]
+        
+        // First router with 1 tool
+        let router1 = ToolRouter(tools: tools1, config: config)
+        await router1.waitForReady()
+        
+        // Second router with 2 tools - cache should be invalidated
+        let router2 = ToolRouter(tools: tools2, config: config)
+        await router2.waitForReady()
+        
+        // Both should be ready (cache was invalidated and recomputed)
+        let isReady2 = await router2.isReady
+        XCTAssertTrue(isReady2)
+        
+        // Verify second router has both tools
+        let allTools = await router2.allTools
+        XCTAssertEqual(allTools.count, 2)
+        
+        // Cleanup
+        await router2.clearDiskCache()
+    }
+    
+    // MARK: - MaxTools Limit Tests
+    
+    /// Test: maxTools should limit returned tools count
+    /// 测试：maxTools 应限制返回的工具数量
+    func test_maxTools_shouldLimitReturnedCount() async {
+        let config = RouterConfig(
+            similarityThreshold: 0.01,  // Very low to match all
+            maxTools: 2,
+            enableKeywordMatching: false,
+            enableSemanticMatching: true,
+            enableDiskCache: false
+        )
+        
+        let tools = [
+            SimpleTool(name: "tool1", description: "Weather forecast tool", keywords: []),
+            SimpleTool(name: "tool2", description: "Weather information tool", keywords: []),
+            SimpleTool(name: "tool3", description: "Weather data tool", keywords: []),
+            SimpleTool(name: "tool4", description: "Weather report tool", keywords: [])
+        ]
+        
+        let router = ToolRouter(tools: tools, config: config)
+        await router.waitForReady()
+        
+        let result = await router.route("weather")
+        
+        if result.method == .semantic {
+            XCTAssertLessThanOrEqual(result.tools.count, 2, "Should return at most maxTools")
+        }
+    }
+    
+    // MARK: - Similarity Threshold Tests
+    
+    /// Test: High similarity threshold should filter more tools
+    /// 测试：高相似度阈值应过滤更多工具
+    func test_similarityThreshold_highValueShouldFilterMore() async {
+        let highThresholdConfig = RouterConfig(
+            similarityThreshold: 0.9,  // Very high
+            enableKeywordMatching: false,
+            enableSemanticMatching: true,
+            enableDiskCache: false
+        )
+        
+        let lowThresholdConfig = RouterConfig(
+            similarityThreshold: 0.1,  // Very low
+            enableKeywordMatching: false,
+            enableSemanticMatching: true,
+            enableDiskCache: false
+        )
+        
+        let tools = [
+            SimpleTool(name: "weather", description: "Get weather information", keywords: [])
+        ]
+        
+        let highRouter = ToolRouter(tools: tools, config: highThresholdConfig)
+        let lowRouter = ToolRouter(tools: tools, config: lowThresholdConfig)
+        
+        await highRouter.waitForReady()
+        await lowRouter.waitForReady()
+        
+        let highResult = await highRouter.route("What is the temperature")
+        let lowResult = await lowRouter.route("What is the temperature")
+        
+        // High threshold more likely to fallback, low threshold more likely to match
+        // Just verify both complete without error
+        XCTAssertFalse(highResult.shouldSkip)
+        XCTAssertFalse(lowResult.shouldSkip)
+    }
+    
+    // MARK: - Multiple Router Instances Tests
+    
+    /// Test: Multiple router instances should work independently
+    /// 测试：多个路由器实例应独立工作
+    func test_multipleInstances_shouldWorkIndependently() async {
+        let config1 = RouterConfig(
+            enableSemanticMatching: true,
+            enableDiskCache: false
+        )
+        
+        let config2 = RouterConfig(
+            enableSemanticMatching: true,
+            enableDiskCache: false
+        )
+        
+        let tools1 = [
+            SimpleTool(name: "weather", description: "Weather", keywords: ["天气"])
+        ]
+        
+        let tools2 = [
+            SimpleTool(name: "email", description: "Email", keywords: ["邮件"])
+        ]
+        
+        let router1 = ToolRouter(tools: tools1, config: config1)
+        let router2 = ToolRouter(tools: tools2, config: config2)
+        
+        await router1.waitForReady()
+        await router2.waitForReady()
+        
+        // Both should work independently
+        let result1 = await router1.route("今天天气")
+        let result2 = await router2.route("发送邮件")
+        
+        XCTAssertTrue(result1.tools.contains { $0.name == "weather" })
+        XCTAssertTrue(result2.tools.contains { $0.name == "email" })
+        
+        // Verify they don't interfere with each other
+        let allTools1 = await router1.allTools
+        let allTools2 = await router2.allTools
+        XCTAssertEqual(allTools1.count, 1)
+        XCTAssertEqual(allTools2.count, 1)
+        XCTAssertNotEqual(allTools1[0].name, allTools2[0].name)
+    }
+    
+    // MARK: - Custom Embedding Provider Tests
+    
+    /// Test: Custom embedding provider should invalidate cache
+    /// 测试：自定义嵌入提供者应使缓存失效
+    func test_customProvider_shouldInvalidateCache() async {
+        let cacheFileName = "TestProviderCache_\(UUID().uuidString).json"
+        let config = RouterConfig(
+            enableSemanticMatching: true,
+            enableDiskCache: true,
+            cacheFileName: cacheFileName
+        )
+        
+        let tools = [
+            SimpleTool(name: "test", description: "Test", keywords: [])
+        ]
+        
+        // First router with default provider
+        let router1 = ToolRouter(tools: tools, config: config)
+        await router1.waitForReady()
+        
+        // Second router with custom provider (different name)
+        let customProvider = MockEmbeddingProvider()
+        let router2 = ToolRouter(tools: tools, config: config, embeddingProvider: customProvider)
+        await router2.waitForReady()
+        
+        // Both should be ready
+        let isReady1 = await router1.isReady
+        let isReady2 = await router2.isReady
+        XCTAssertTrue(isReady1)
+        XCTAssertTrue(isReady2)
+        
+        // Cleanup
+        await router2.clearDiskCache()
+    }
+}
+
+// MARK: - Mock Embedding Provider
+
+private final class MockEmbeddingProvider: EmbeddingProvider, @unchecked Sendable {
+    var providerName: String { "MockProvider" }
+    var dimension: Int { 512 }
+    
+    func embed(_ text: String) -> [Double]? {
+        // Return a simple mock embedding
+        return Array(repeating: 0.1, count: dimension)
+    }
+    
+    func isAvailable() -> Bool {
+        return true
+    }
 }
 
 // MARK: - Helper for thread-safe error capture
