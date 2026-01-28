@@ -1,5 +1,9 @@
 # SemanticToolRouter
 
+<p align="center">
+  <a href="README.md">English</a> | <a href="README_CN.md">中文</a>
+</p>
+
 A Swift package for intelligent LLM tool routing. Reduce token consumption and improve accuracy by filtering which tools to pass to your LLM based on user input.
 
 [![Swift](https://img.shields.io/badge/Swift-5.9+-orange.svg)](https://swift.org)
@@ -37,7 +41,7 @@ User Input → SemanticToolRouter → Relevant Tools Only → LLM
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/user/SemanticToolRouter.git", from: "1.0.0")
+    .package(url: "https://github.com/yvente/SemanticToolRouter.git", from: "1.0.0")
 ]
 ```
 
@@ -69,7 +73,7 @@ let tools = [
 let router = ToolRouter(tools: tools)
 
 // 3. Route user input
-let result = router.route("今天上海天气如何")
+let result = router.route("What's the weather today?")
 
 if result.shouldSkip {
     // No tools needed (greeting, chat, etc.)
@@ -142,13 +146,13 @@ let router = ToolRouter(tools: tools, config: config)
 ```swift
 // Include recent context for better matching
 let result = router.route(
-    "帮我查一下",  // Ambiguous without context
+    "Can you check that?",  // Ambiguous without context
     context: [
-        "用户：北京天气怎么样",
-        "助手：北京今天晴朗，25度"
+        "User: What's the weather in Beijing?",
+        "Assistant: Beijing is sunny today, 25°C"
     ]
 )
-// Will match weather tool because context mentions 天气
+// Will match weather tool because context mentions weather
 ```
 
 ## Custom Embedding Provider
@@ -184,7 +188,7 @@ User Input
     ▼
 ┌─────────────────────────────────────┐
 │ Step 1: Keyword Matching (Fast)     │
-│ Input contains "天气" → get_weather │
+│ Input contains "weather" → weather  │
 └─────────────────────────────────────┘
     │ (no match)
     ▼
